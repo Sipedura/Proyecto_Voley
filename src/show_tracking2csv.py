@@ -6,7 +6,6 @@ from collections import deque
 import numpy as np
 import glob
 
-
 def get_distinct_colors(n):
     """Return up to n high-contrast colors."""
     # Predefined high-contrast colors (BGR format)
