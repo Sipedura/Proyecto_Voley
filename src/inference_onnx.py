@@ -135,11 +135,16 @@ def postprocess_output(output, threshold=0.5, input_height=288, input_width=512)
     return results
 
 
-def draw_track(frame, track_points, eventos_vuelo = None, start_idx=0, line_color=(0, 255, 255), thickness=3):
+def draw_track(frame, track_points, eventos_vuelo = None, vel_evento = None, start_idx=0, line_color=(0, 255, 255), thickness=3):
     if eventos_vuelo is None:
         eventos_vuelo = {}
     else:
         eventos_dict = dict(eventos_vuelo)
+
+    if vel_evento is None:
+        vel_evento = {}
+    else:
+        vel_dict = dict(vel_evento)
 
     for i in range(1, len(track_points)):
         pt1 = track_points[i - 1]
@@ -154,7 +159,7 @@ def draw_track(frame, track_points, eventos_vuelo = None, start_idx=0, line_colo
 
         if frame_global in eventos_dict:
             #print("Se grafico un evento")
-            texto = f"{eventos_dict[frame_global]}s"
+            texto = f"{eventos_dict[frame_global]}s, {vel_dict[frame_global]}px/s"
             pos_texto = (pt2[0] + 10, pt2[1] - 10)
             cv2.putText(frame, texto, pos_texto, cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
         
@@ -290,6 +295,7 @@ def calcular_tiempos_de_vuelo(
     # 3. Derivadas directas sobre la trayectoria ya suavizada
     vx = np.gradient(x, dt)
     vy = np.gradient(y, dt)
+    velocidad = np.hypot(vx,vy)
     
     ax = np.gradient(vx, dt)
     ay = np.gradient(vy, dt)
@@ -297,6 +303,7 @@ def calcular_tiempos_de_vuelo(
 
     # 4. Detección de picos de impacto
     eventos_vuelo = []
+    vel_evento = []
     ultimo_frame_golpe = None
     n_puntos = len(aceleracion)
 
@@ -311,16 +318,18 @@ def calcular_tiempos_de_vuelo(
             if ultimo_frame_golpe is None:
                 ultimo_frame_golpe = frame_real
                 eventos_vuelo.append((frame_real, 0.0))
+                vel_evento.append((frame_real,0.0))
                 #print("Se detectó un evento")
             elif (frame_real - ultimo_frame_golpe) >= min_frames_entre_golpes:
                 t_vuelo = (frame_real - ultimo_frame_golpe) * dt
                 eventos_vuelo.append((frame_real, round(t_vuelo, 3)))
+                vel_evento.append((frame_real, round(np.mean(velocidad[ultimo_frame_golpe : frame_real + 1]),1)))
                 ultimo_frame_golpe = frame_real
                 #print("Se detectó un evento")
         #else:
            #print("No se detectó un evento")
 
-    return eventos_vuelo, vx, vy, ax, ay
+    return eventos_vuelo,vel_evento, vx, vy, ax, ay
 
 def main():
     args = parse_args()
@@ -388,7 +397,7 @@ def main():
 
     pbar1.close()
 
-    eventos_vuelo,vx,vy,ax,ay = calcular_tiempos_de_vuelo(track_points,fps)
+    eventos_vuelo,vel_evento,vx,vy,ax,ay = calcular_tiempos_de_vuelo(track_points,fps)
 
     # Guardar resultados en el archivo CSV
     if csv_path is not None:
@@ -434,7 +443,7 @@ def main():
         pts_slice = track_points[start_idx : frame_index + 1]
 
         if args.visualize or out_writer is not None:
-            vis_frame = draw_track(frame, pts_slice, eventos_vuelo = eventos_vuelo, start_idx = start_idx)
+            vis_frame = draw_track(frame, pts_slice, eventos_vuelo = eventos_vuelo, vel_evento = vel_evento, start_idx = start_idx)
             
             if args.visualize:
                 cv2.namedWindow("Ball Tracking", cv2.WINDOW_NORMAL)
