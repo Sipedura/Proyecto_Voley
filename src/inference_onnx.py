@@ -135,7 +135,12 @@ def postprocess_output(output, threshold=0.5, input_height=288, input_width=512)
     return results
 
 
-def draw_track(frame, track_points,eventos_vuelo, line_color=(0, 255, 255), thickness=3):
+def draw_track(frame, track_points, eventos_vuelo = None, start_idx=0, line_color=(0, 255, 255), thickness=3):
+    if eventos_vuelo is None:
+        eventos_vuelo = {}
+    else:
+        eventos_dict = dict(eventos_vuelo)
+
     for i in range(1, len(track_points)):
         pt1 = track_points[i - 1]
         pt2 = track_points[i]
@@ -143,12 +148,15 @@ def draw_track(frame, track_points,eventos_vuelo, line_color=(0, 255, 255), thic
         if pt1 is None or pt2 is None:
             continue
         cv2.line(frame, pt1, pt2, line_color, thickness)
-        for frame_evento, t_vuelo in eventos_vuelo:
-            if frame_evento == i:
-                texto = f"{t_vuelo}s"
-                pos_texto = (pt2[0] + 10, pt2[1] - 10)
-                cv2.putText(frame, texto, pos_texto, cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), thickness)
-                break
+
+        # Como el graficador funciona levantando de a 25 frames, se le pasa el frame_global a eventos dict para graficar el evento
+        frame_global = start_idx + i
+
+        if frame_global in eventos_dict:
+            #print("Se grafico un evento")
+            texto = f"{eventos_dict[frame_global]}s"
+            pos_texto = (pt2[0] + 10, pt2[1] - 10)
+            cv2.putText(frame, texto, pos_texto, cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
         
     if track_points and track_points[-1] is not None:
         cv2.circle(frame, track_points[-1], 6, (0, 0, 255), -1)
@@ -239,7 +247,7 @@ def procesar_y_reparar_trayectoria(pred_item, track_points, frame_width, frame_h
     return pred_item
 
 def calcular_tiempos_de_vuelo(
-        track_points, fps, umbral_acel=500, min_frames_entre_golpes=15
+        track_points, fps, umbral_acel=8000, min_frames_entre_golpes=10
 ):
     """
     Calcula aceleraciones y tiempos de vuelo directamente sobre track_points ya reparado,
@@ -294,8 +302,7 @@ def calcular_tiempos_de_vuelo(
 
     for i in range(1, n_puntos - 1):
         es_pico = (
-            np.sign(vy[i]) != np.sign(vy[i-1]) and
-            abs(vy[i] - vy[i-1]) < umbral_acel
+            abs(ay[i] - ay[i-1]) > umbral_acel
         )
 
         if es_pico:
@@ -304,10 +311,14 @@ def calcular_tiempos_de_vuelo(
             if ultimo_frame_golpe is None:
                 ultimo_frame_golpe = frame_real
                 eventos_vuelo.append((frame_real, 0.0))
+                #print("Se detectó un evento")
             elif (frame_real - ultimo_frame_golpe) >= min_frames_entre_golpes:
                 t_vuelo = (frame_real - ultimo_frame_golpe) * dt
                 eventos_vuelo.append((frame_real, round(t_vuelo, 3)))
                 ultimo_frame_golpe = frame_real
+                #print("Se detectó un evento")
+        #else:
+           #print("No se detectó un evento")
 
     return eventos_vuelo, vx, vy, ax, ay
 
@@ -423,7 +434,7 @@ def main():
         pts_slice = track_points[start_idx : frame_index + 1]
 
         if args.visualize or out_writer is not None:
-            vis_frame = draw_track(frame, pts_slice,eventos_vuelo)
+            vis_frame = draw_track(frame, pts_slice, eventos_vuelo = eventos_vuelo, start_idx = start_idx)
             
             if args.visualize:
                 cv2.namedWindow("Ball Tracking", cv2.WINDOW_NORMAL)
