@@ -8,10 +8,8 @@ from collections import deque
 import os
 import time
 from tqdm import tqdm
-# import math # Para la función de interpolación original, pero no se usa en la versión actual
-from scipy.interpolate import CubicSpline
 import math
-
+from scipy.interpolate import CubicSpline
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -137,137 +135,48 @@ def postprocess_output(output, threshold=0.5, input_height=288, input_width=512)
     return results
 
 
-"""
-Definición original de draw_track, debería de modificarlo para mantenerlo
-def draw_track(
-    frame, track_points, current_color=(0, 0, 255), history_color=(255, 0, 0)
-):
-    for point in list(track_points)[:-1]:
-        if point is not None:
-            cv2.circle(frame, point, 5, history_color, -1)
-    if track_points and track_points[-1] is not None:
-        cv2.circle(frame, track_points[-1], 5, current_color, -1)
-    return frame
-"""
-## Devolvio Gemini, hay q modificarlo
-def draw_track(
-    frame, track_points, line_color=(0, 255, 255), thickness=3
-):
-    # Dibuja segmentos continuos uniendo puntos consecutivos
+def draw_track(frame, track_points,eventos_vuelo, line_color=(0, 255, 255), thickness=3):
     for i in range(1, len(track_points)):
         pt1 = track_points[i - 1]
         pt2 = track_points[i]
-            
-        # Omitir si alguno de los dos puntos no fue detectado en ese fotograma
-        if pt1 is None or pt2 is None: # Umbral para ignorar puntos muy lejanos
-            continue
-        else: #borrar estas 2 lineas y descomentar abajo
-            cv2.line(frame, pt1, pt2, line_color, thickness)
-        """
-        dist = np.sqrt((pt2[0] - pt1[0]) ** 2 + (pt2[1] - pt1[1]) ** 2)
-
-        if dist <= 100:  # Umbral de distancia para dibujar la línea
-            cv2.line(frame, pt1, pt2, line_color, thickness)
-        else:
-            continue
-        """
-    
         
-    # Dibujar un punto destacado en la posición actual de la pelota
+        if pt1 is None or pt2 is None:
+            continue
+        cv2.line(frame, pt1, pt2, line_color, thickness)
+        for frame_evento, t_vuelo in eventos_vuelo:
+            if frame_evento == i:
+                texto = f"{t_vuelo}s"
+                pos_texto = (pt2[0] + 10, pt2[1] - 10)
+                cv2.putText(frame, texto, pos_texto, cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), thickness)
+                break
+        
     if track_points and track_points[-1] is not None:
         cv2.circle(frame, track_points[-1], 6, (0, 0, 255), -1)
         
     return frame
-"""
-def interpolar_prediccion(pred_item, track_points, frame_width, frame_height, input_width, input_height, ):
-    
-    #Aplica interpolación cúbica si:
-    #- Hay al menos 4 puntos en 'track_points'
-    #- La visibilidad es 0 O la distancia euclidiana supera 'max_dist' (100 px).
-    
-    #Si hay menos de 4 puntos o no se cumplen las condiciones, devuelve la predicción original sin modificar.
-    
-    # Si hay menos de 4 puntos en el historial, se ignora la interpolación
-    if len(track_points) < 4:
-        return pred_item
 
-    visibility, x, y, w, h = pred_item
-    
-    # Proyección a la resolución del frame para medir la distancia euclidiana real
-    x_orig = x * frame_width / input_width
-    y_orig = y * frame_height / input_height
-
-    requiere_interpolacion = False
-
-    # 1. Comprobar condiciones
-    if visibility != 0:
-        return(visibility, x, y, w, h)  # No se requiere interpolación si es visible
-    else:
-        requiere_interpolacion = True
-
-    # 2. Aplicar interpolación cúbica con CubicSpline
-    if requiere_interpolacion:
-        # Extraer exactamente los últimos 4 puntos registrados
-        puntos = list(track_points)[-4:]
-        x_vals = np.array([p[0] for p in puntos])
-        y_vals = np.array([p[1] for p in puntos])
-        
-        # Puntos temporales t = [0, 1, 2, 3]
-        t_pasado = np.arange(4)
-        
-        # Ajuste de trazador cúbico para X e Y
-        cs_x = CubicSpline(t_pasado, x_vals, bc_type='natural')
-        cs_y = CubicSpline(t_pasado, y_vals, bc_type='natural')
-        
-        # Extrapolación al frame actual (t = 4)
-        x_interp_orig = float(cs_x(4))
-        y_interp_orig = float(cs_y(4))
-
-        # Reescalar las coordenadas de vuelta al tamaño 'input'
-        x_interp = x_interp_orig * input_width / frame_width
-        y_interp = y_interp_orig * input_height / frame_height
-
-        # Retorna el punto corregido forzando visibilidad = 1
-        return [1, x_interp, y_interp, w, h]
-
-    # Si no requirió interpolación, devuelve el elemento intacto
-    return pred_item
-"""
-
-import math
-import numpy as np
-from scipy.interpolate import CubicSpline
 
 def procesar_y_reparar_trayectoria(pred_item, track_points, frame_width, frame_height, input_width, input_height, max_dist=100):
-    """
-    Filtra falsos positivos requiriendo 3 frames consecutivos visibles Y con distancia 
-    consecutiva <= max_dist (100 px). 
-    
-    Una vez confirmada la racha (dist(P1,P2) <= 100 y dist(P2,P3) <= 100), repara 
-    retroactivamente los huecos intermedios usando CubicSpline.
-    """
-    # Variables de estado persistentes entre llamadas
     if not hasattr(procesar_y_reparar_trayectoria, "racha"):
         procesar_y_reparar_trayectoria.racha = 0
         procesar_y_reparar_trayectoria.buffer = []
 
     visibility, x, y, w, h = pred_item
 
-    # 1. Si no es visible, reiniciar racha y guardar None
+    # 1. No visible
     if visibility == 0:
         procesar_y_reparar_trayectoria.racha = 0
         procesar_y_reparar_trayectoria.buffer.clear()
         track_points.append(None)
         return pred_item
 
-    # 2. Convertir coordenadas a píxeles del frame
+    # 2. Coordenadas reales
     x_orig = x * frame_width / input_width
     y_orig = y * frame_height / input_height
     punto_actual = (int(x_orig), int(y_orig))
 
-    # 3. Control de racha y validación de distancias
+    # 3. Evaluación de racha y distancias
     if procesar_y_reparar_trayectoria.racha >= 3:
-        # Trayectoria ya confirmada: validar respecto al último punto confirmado
         ultimo_confirmado = track_points[-1]
         dist = math.hypot(punto_actual[0] - ultimo_confirmado[0], punto_actual[1] - ultimo_confirmado[1])
         
@@ -276,180 +185,132 @@ def procesar_y_reparar_trayectoria(pred_item, track_points, frame_width, frame_h
             track_points.append(punto_actual)
             return pred_item
         else:
-            # Salto anómalo: rompe la racha y el punto pasa a ser candidato P1
             procesar_y_reparar_trayectoria.racha = 1
             procesar_y_reparar_trayectoria.buffer = [punto_actual]
             track_points.append(None)
             return pred_item
 
     elif procesar_y_reparar_trayectoria.racha == 0:
-        # Primer candidato de la racha (P1)
         procesar_y_reparar_trayectoria.racha = 1
         procesar_y_reparar_trayectoria.buffer = [punto_actual]
         track_points.append(None)
         return pred_item
 
-    else: # racha == 1 (buscando P2) o racha == 2 (buscando P3)
-        # Validar distancia <= 100 px contra el último candidato del buffer
+    else:  # racha == 1 o 2
         ultimo_candidato = procesar_y_reparar_trayectoria.buffer[-1]
         dist = math.hypot(punto_actual[0] - ultimo_candidato[0], punto_actual[1] - ultimo_candidato[1])
 
         if dist <= max_dist:
             procesar_y_reparar_trayectoria.racha += 1
             procesar_y_reparar_trayectoria.buffer.append(punto_actual)
-            track_points.append(None)  # Provisional hasta validar los 3 puntos
+            track_points.append(None)
         else:
-            # Distancia > 100 px: el punto actual pasa a ser el nuevo candidato P1
             procesar_y_reparar_trayectoria.racha = 1
             procesar_y_reparar_trayectoria.buffer = [punto_actual]
             track_points.append(None)
             return pred_item
 
-    # 4. Confirmación e interpolación al alcanzar exactamente racha == 3
+    # 4. Confirmación e interpolación lineal entre huecos
     if procesar_y_reparar_trayectoria.racha == 3:
         p1, p2, p3 = procesar_y_reparar_trayectoria.buffer
         
-        # Confirmar P1, P2 y P3 en el deque
         track_points[-3] = p1
         track_points[-2] = p2
         track_points[-1] = p3
         procesar_y_reparar_trayectoria.buffer.clear()
 
-        # Interpolación por puente en los huecos 'None' entre tramos confirmados
-        puntos_conocidos = [(i, p) for i, p in enumerate(track_points) if p is not None]
-        indices_none = [i for i, p in enumerate(track_points) if p is None]
+        indices_validos = [i for i, p in enumerate(track_points) if p is not None]
 
-        if indices_none and len(puntos_conocidos) >= 2:
-            t_conocidos = [p[0] for p in puntos_conocidos]
-            x_conocidos = [p[1][0] for p in puntos_conocidos]
-            y_conocidos = [p[1][1] for p in puntos_conocidos]
+        for idx in range(len(indices_validos) - 1):
+            i_A = indices_validos[idx]
+            i_B = indices_validos[idx + 1]
 
-            if len(puntos_conocidos) >= 4:
-                # CubicSpline cuando hay al menos 4 puntos ancla en total
-                cs_x = CubicSpline(t_conocidos, x_conocidos, bc_type='natural')
-                cs_y = CubicSpline(t_conocidos, y_conocidos, bc_type='natural')
-                
-                for i in indices_none:
-                    if t_conocidos[0] < i < t_conocidos[-1]:
-                        track_points[i] = (int(cs_x(i)), int(cs_y(i)))
-            else:
-                # Interpolación lineal fallback si hay entre 2 y 3 puntos ancla
-                for i in indices_none:
-                    if t_conocidos[0] < i < t_conocidos[-1]:
-                        x_interp = int(np.interp(i, t_conocidos, x_conocidos))
-                        y_interp = int(np.interp(i, t_conocidos, y_conocidos))
-                        track_points[i] = (x_interp, y_interp)
+            if i_B > i_A + 1:
+                p_A = track_points[i_A]
+                p_B = track_points[i_B]
+                num_pasos = i_B - i_A
+
+                for k in range(i_A + 1, i_B):
+                    t = (k - i_A) / num_pasos
+                    x_interp = int(round(p_A[0] + t * (p_B[0] - p_A[0])))
+                    y_interp = int(round(p_A[1] + t * (p_B[1] - p_A[1])))
+                    track_points[k] = (x_interp, y_interp)
 
     return pred_item
-"""
-def main():
-    args = parse_args()
-    input_width, input_height = 512, 288
 
-    model = load_model(args.model_path)
-    cap, frame_width, frame_height, fps, total_frames = initialize_video(
-        args.video_path
-    )
+def calcular_tiempos_de_vuelo(
+        track_points, fps, umbral_acel=500, min_frames_entre_golpes=15
+):
+    """
+    Calcula aceleraciones y tiempos de vuelo directamente sobre track_points ya reparado,
+    omitiendo cualquier re-interpolación redundante.
+    """
+    indices_validos = [i for i, p in enumerate(track_points) if p is not None and p != (-1, -1)]
+    
+    # 1. Si no hay suficientes puntos, retornar 5 elementos vacíos
+    if len(indices_validos) < 4:
+        return [], np.array([]), np.array([]), np.array([]), np.array([])
 
-    video_basename = os.path.splitext(os.path.basename(args.video_path))[0]
-    out_writer, _ = setup_output_writer(
-        video_basename, args.output_dir, frame_width, frame_height, fps, args.only_csv
-    )
-    csv_path = setup_csv_file(video_basename, args.output_dir)
+    inicio = indices_validos[0]
 
-    frame_buffer = deque(maxlen=3)
-    track_points = deque(maxlen=args.track_length)
-    # Cambio Gemini
-    #track_points = []
-    frame_index = 0
+    # 2. Rellenar huecos (None o (-1, -1)) usando los vecinos válidos más cercanos
+    n_puntos = len(track_points)
+    segmento = []
 
-    pbar = tqdm(total=total_frames, desc="Processing video", unit="frame")
+    # Normalizar reemplazando None por (-1, -1) para procesar
+    pts_temp = [(-1, -1) if p is None else p for p in track_points]
 
-    while cap.isOpened():
-        start_time = time.time()
-
-        ret, frame = cap.read()
-        if not ret:
-            break
-
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        processed_frame = preprocess_frame(frame_rgb, input_height, input_width)
-        frame_buffer.append(processed_frame)
-
-        if len(frame_buffer) < 3:
-            for _ in range(2):
-                frame_buffer.append(processed_frame)
-
-        if len(frame_buffer) == 3:
-            input_tensor = np.concatenate(frame_buffer, axis=2)
-            input_tensor = np.expand_dims(input_tensor, axis=0)
-            input_tensor = np.transpose(input_tensor, (0, 3, 1, 2)).astype(np.float32)
-
-            input_name = model.get_inputs()[0].name
-            output = model.run(None, {input_name: input_tensor})[0]
-
-            predictions = postprocess_output(
-                output, input_height=input_height, input_width=input_width
-            )
-            
-            predictions[2] = procesar_y_reparar_trayectoria(
-                predictions[2], 
-                track_points, 
-                frame_width, 
-                frame_height, 
-                input_width, 
-                input_height,
-            )
-
-            visibility, x, y, w, h = predictions[2]
-            if visibility == 0:
-                x_orig, y_orig, w_orig, h_orig = -1, -1, -1, -1
-                # Comentado por el cambio implementado por gemini
-                if len(track_points) > 0:
-                    track_points.popleft()
-                #track_points.append(None)
+    # Reemplazo por interpolación lineal/vecinos para todo el arreglo
+    for p in range(n_puntos):
+        if pts_temp[p] == (-1, -1):
+            if p < n_puntos - 1 and pts_temp[p + 1] != (-1, -1):
+                segmento.append(pts_temp[p + 1])
+            elif p > 0 and pts_temp[p - 1] != (-1, -1):
+                segmento.append(pts_temp[p - 1])
             else:
-                x_orig = x * frame_width / input_width
-                y_orig = y * frame_height / input_height
-                w_orig = w * frame_width / input_width
-                h_orig = h * frame_height / input_height
-                track_points.append((int(x_orig), int(y_orig)))
+                # Si está rodeado de invalidos, toma el punto válido más cercano
+                idx_cercano = min(indices_validos, key=lambda x: abs(x - p))
+                segmento.append(pts_temp[idx_cercano])
+        else:
+            segmento.append(pts_temp[p])
 
-            result = {
-                "Frame": frame_index,
-                "Visibility": visibility,
-                "X": int(x_orig),
-                "Y": int(y_orig),
-                "W": int(w_orig),
-                "H": int(h_orig),
-            }
-            append_to_csv(result, csv_path)
+    pts = np.array(segmento, dtype=float)
+    x = pts[:, 0]
+    y = pts[:, 1]
+    dt = 1.0 / fps
 
-            if args.visualize or out_writer is not None:
-                vis_frame = frame.copy()
-                vis_frame = draw_track(vis_frame, track_points)
-                if args.visualize:
-                    cv2.namedWindow("Ball Tracking", cv2.WINDOW_NORMAL)
-                    cv2.imshow("Ball Tracking", vis_frame)
-                    if cv2.waitKey(1) & 0xFF == ord("q"):
-                        break
-                if out_writer is not None:
-                    out_writer.write(vis_frame)
+    # 3. Derivadas directas sobre la trayectoria ya suavizada
+    vx = np.gradient(x, dt)
+    vy = np.gradient(y, dt)
+    
+    ax = np.gradient(vx, dt)
+    ay = np.gradient(vy, dt)
+    aceleracion = np.hypot(ax, ay)
 
-        end_time = time.time()
-        batch_time = end_time - start_time
-        batch_fps = 1 / batch_time if batch_time > 0 else 0
+    # 4. Detección de picos de impacto
+    eventos_vuelo = []
+    ultimo_frame_golpe = None
+    n_puntos = len(aceleracion)
 
-        pbar.update(1)
-        frame_index += 1
+    for i in range(1, n_puntos - 1):
+        es_pico = (
+            np.sign(vy[i]) != np.sign(vy[i-1]) and
+            abs(vy[i] - vy[i-1]) < umbral_acel
+        )
 
-    pbar.close()
-    cap.release()
-    if out_writer is not None:
-        out_writer.release()
-    if args.visualize:
-        cv2.destroyAllWindows()
-"""
+        if es_pico:
+            frame_real = inicio + i  # Mapear al índice global del video
+            
+            if ultimo_frame_golpe is None:
+                ultimo_frame_golpe = frame_real
+                eventos_vuelo.append((frame_real, 0.0))
+            elif (frame_real - ultimo_frame_golpe) >= min_frames_entre_golpes:
+                t_vuelo = (frame_real - ultimo_frame_golpe) * dt
+                eventos_vuelo.append((frame_real, round(t_vuelo, 3)))
+                ultimo_frame_golpe = frame_real
+
+    return eventos_vuelo, vx, vy, ax, ay
+
 def main():
     args = parse_args()
     input_width, input_height = 512, 288
@@ -465,22 +326,18 @@ def main():
     )
     csv_path = setup_csv_file(video_basename, args.output_dir)
 
-    # Buffer de entrada para la inferencia del modelo ONNX (3 frames)
+    # Buffer de entrada para el modelo (3 frames para inferencia)
     frame_buffer = deque(maxlen=3)
     
-    # 1. RETARDO DE RENDERIZADO: Cola para guardar los frames crudos antes de dibujar
-    DELAY_FRAMES = 15  
-    render_queue = deque()
-
-    # 2. Historial global continuo de la trayectoria
+    # Historial completo de la trayectoria
     track_points = []
-    
-    frame_index = 0
-    pbar = tqdm(total=total_frames, desc="Processing video", unit="frame")
+
+    # =========================================================================
+    # PASADA 1: Inferencia e interpolación completa de la trayectoria
+    # =========================================================================
+    pbar1 = tqdm(total=total_frames, desc="Pasada 1: Detección e Interpolación", unit="frame")
 
     while cap.isOpened():
-        start_time = time.time()
-
         ret, frame = cap.read()
         if not ret:
             break
@@ -505,8 +362,8 @@ def main():
                 output, input_height=input_height, input_width=input_width
             )
             
-            # La función gestiona la racha, los None y la interpolación en 'track_points'
-            predictions[2] = procesar_y_reparar_trayectoria(
+            # Gestiona la racha y rellena track_points
+            procesar_y_reparar_trayectoria(
                 predictions[2], 
                 track_points, 
                 frame_width, 
@@ -516,81 +373,77 @@ def main():
                 max_dist=100
             )
 
-            # Se guarda el frame original con su número de frame en el buffer de retardo
-            render_queue.append((frame.copy(), frame_index))
+        pbar1.update(1)
 
-            # 3. Dibujar y guardar solo cuando la cola supere el tiempo de retardo
-            if len(render_queue) > DELAY_FRAMES:
-                delayed_frame, delayed_idx = render_queue.popleft()
-                
-                # Extraer la estela de puntos (track_length) correspondiente a este frame diferido
-                start_idx = max(0, delayed_idx - args.track_length + 1)
-                pts_slice = track_points[start_idx : delayed_idx + 1]
-                
-                # Guardar datos en CSV para el frame diferido
-                p_curr = track_points[delayed_idx]
-                vis_curr = 1 if p_curr is not None else 0
-                x_curr, y_curr = p_curr if p_curr is not None else (-1, -1)
-                
-                result = {
-                    "Frame": delayed_idx,
-                    "Visibility": vis_curr,
-                    "X": x_curr,
-                    "Y": y_curr,
-                    "W": 0,
-                    "H": 0,
-                }
-                append_to_csv(result, csv_path)
+    pbar1.close()
 
-                # Renderizar la trayectoria diferida
-                if args.visualize or out_writer is not None:
-                    vis_frame = draw_track(delayed_frame, pts_slice)
-                    if args.visualize:
-                        cv2.namedWindow("Ball Tracking", cv2.WINDOW_NORMAL)
-                        cv2.imshow("Ball Tracking", vis_frame)
-                        if cv2.waitKey(1) & 0xFF == ord("q"):
-                            break
-                    if out_writer is not None:
-                        out_writer.write(vis_frame)
+    eventos_vuelo,vx,vy,ax,ay = calcular_tiempos_de_vuelo(track_points,fps)
 
-        end_time = time.time()
-        pbar.update(1)
-        frame_index += 1
+    # Guardar resultados en el archivo CSV
+    if csv_path is not None:
+        rows = []
+        for idx, pt in enumerate(track_points):
+            vis = 1 if pt is not None else 0
+            px, py = pt if pt is not None else (-1, -1)
+            vx_val = round(float(vx[idx]), 2) if vis != 0 and idx < len(vx) else 0.0
+            vy_val = round(float(vy[idx]), 2) if vis != 0 and idx < len(vx) else 0.0
+            ax_val = round(float(ax[idx]), 2) if vis != 0 and idx < len(ax) else 0.0
+            ay_val = round(float(ay[idx]), 2) if vis != 0 and idx < len(ax) else 0.0
+            rows.append({
+                "Frame": idx,
+                "Visibility": vis,
+                "X": px,
+                "Y": py,
+                "vX": vx_val,
+                "vY": vy_val,
+                "aX": ax_val,
+                "aY": ay_val
+            })
+        pd.DataFrame(rows).to_csv(csv_path, index=False)
 
-    # 4. VACIAR EL BUFFER AL FINALIZAR EL VIDEO (para procesar los últimos 15 frames)
-    while render_queue:
-        delayed_frame, delayed_idx = render_queue.popleft()
-        start_idx = max(0, delayed_idx - args.track_length + 1)
-        pts_slice = track_points[start_idx : delayed_idx + 1]
-        
-        p_curr = track_points[delayed_idx]
-        vis_curr = 1 if p_curr is not None else 0
-        x_curr, y_curr = p_curr if p_curr is not None else (-1, -1)
-        
-        result = {
-            "Frame": delayed_idx,
-            "Visibility": vis_curr,
-            "X": x_curr,
-            "Y": y_curr,
-            "W": 0,
-            "H": 0,
-        }
-        append_to_csv(result, csv_path)
+    # Si se solicitó solo CSV, finalizamos aquí sin renderizar video
+    if args.only_csv:
+        cap.release()
+        return
+
+    # =========================================================================
+    # PASADA 2: Renderizado visual con los datos ya corregidos
+    # =========================================================================
+    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+    pbar2 = tqdm(total=total_frames, desc="Pasada 2: Renderizado", unit="frame")
+    frame_index = 0
+
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret or frame_index >= len(track_points):
+            break
+
+        # Extraer el tramo de la estela hasta el frame actual
+        start_idx = max(0, frame_index - args.track_length + 1)
+        pts_slice = track_points[start_idx : frame_index + 1]
 
         if args.visualize or out_writer is not None:
-            vis_frame = draw_track(delayed_frame, pts_slice)
+            vis_frame = draw_track(frame, pts_slice,eventos_vuelo)
+            
             if args.visualize:
+                cv2.namedWindow("Ball Tracking", cv2.WINDOW_NORMAL)
                 cv2.imshow("Ball Tracking", vis_frame)
-                cv2.waitKey(1)
+                if cv2.waitKey(1) & 0xFF == ord("q"):
+                    break
+                    
             if out_writer is not None:
                 out_writer.write(vis_frame)
 
-    pbar.close()
+        pbar2.update(1)
+        frame_index += 1
+
+    pbar2.close()
     cap.release()
     if out_writer is not None:
         out_writer.release()
     if args.visualize:
         cv2.destroyAllWindows()
+
 
 if __name__ == "__main__":
     main()
