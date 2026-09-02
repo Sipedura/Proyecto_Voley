@@ -104,13 +104,17 @@ def append_to_csv(result, csv_path):
         return
     pd.DataFrame([result]).to_csv(csv_path, mode="a", header=False, index=False)
 
-
+"""
+    Realiza el escalado del frame para su posterior procesamiento en postprocess_output
+"""
 def preprocess_frame(frame, input_height=288, input_width=512):
     frame = cv2.resize(frame, (input_width, input_height))
     frame = frame.astype(np.float32) / 255.0
     return frame
 
-
+"""
+    Función que realiza el traqueo de la pelota a partir del modelo cargado
+"""
 def postprocess_output(output, threshold=0.5, input_height=288, input_width=512):
     results = []
     for frame_idx in range(3):
@@ -134,7 +138,9 @@ def postprocess_output(output, threshold=0.5, input_height=288, input_width=512)
             results.append((0, 0, 0, 0, 0))
     return results
 
-
+"""
+Función que levanta la trayectoria de la pelota de voley e informa los tiempos de vuelo
+"""
 def draw_track(frame, track_points, eventos_vuelo = None, vel_evento = None, start_idx=0, line_color=(0, 255, 255), thickness=3):
     if eventos_vuelo is None:
         eventos_vuelo = {}
@@ -170,6 +176,11 @@ def draw_track(frame, track_points, eventos_vuelo = None, vel_evento = None, sta
 
 
 def procesar_y_reparar_trayectoria(pred_item, track_points, frame_width, frame_height, input_width, input_height, max_dist=100):
+    """
+    Procesado y reparación de la trayectoria, este análsis se realiza en la primera pasada
+    Se planteo así debido a que con un análsis de una sola pasada no se podía realizar el cálculo de los tiempos de vuelo a partir
+    de las variaciones en la aceleración
+    """
     if not hasattr(procesar_y_reparar_trayectoria, "racha"):
         procesar_y_reparar_trayectoria.racha = 0
         procesar_y_reparar_trayectoria.buffer = []
@@ -256,7 +267,7 @@ def calcular_tiempos_de_vuelo(
 ):
     """
     Calcula aceleraciones y tiempos de vuelo directamente sobre track_points ya reparado,
-    omitiendo cualquier re-interpolación redundante.
+    sin realizar reinterpolaciones innecesarias.
     """
     indices_validos = [i for i, p in enumerate(track_points) if p is not None and p != (-1, -1)]
     
@@ -335,6 +346,9 @@ def main():
     args = parse_args()
     input_width, input_height = 512, 288
 
+    """
+    Se carga el modelo
+    """
     model = load_model(args.model_path)
     cap, frame_width, frame_height, fps, total_frames = initialize_video(
         args.video_path
@@ -375,6 +389,9 @@ def main():
             input_tensor = np.expand_dims(input_tensor, axis=0)
             input_tensor = np.transpose(input_tensor, (0, 3, 1, 2)).astype(np.float32)
 
+            """
+            En estas líneas debe de obtener el mapa de calor y se los pasa a postprocess_output
+            """
             input_name = model.get_inputs()[0].name
             output = model.run(None, {input_name: input_tensor})[0]
 
