@@ -115,6 +115,8 @@ def preprocess_frame(frame, input_height=288, input_width=512):
 """
     Función que realiza el traqueo de la pelota a partir del modelo cargado
 """
+"""
+# original (probando el cambio)
 def postprocess_output(output, threshold=0.5, input_height=288, input_width=512):
     results = []
     for frame_idx in range(3):
@@ -136,6 +138,45 @@ def postprocess_output(output, threshold=0.5, input_height=288, input_width=512)
                 results.append((0, 0, 0, 0, 0))
         else:
             results.append((0, 0, 0, 0, 0))
+    return results
+""" 
+# cambio propuesto por la ia, parece un poco más eficaz, estoy probando
+def postprocess_output(output, min_confidence=0.55, rel_ratio=0.75, min_area=3, max_area=800):
+    
+    results = []
+    for frame_idx in range(3):
+        heatmap = output[0, frame_idx, :, :]
+        min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(heatmap)
+
+        # 1. Si la confianza máxima no supera el umbral base, descartar
+        if max_val < min_confidence:
+            results.append((0, 0, 0, 0, 0))
+            continue
+
+        # 2. Umbral adaptativo relativo al pico más alto del frame
+        adaptive_thresh = max_val * rel_ratio
+        _, binary = cv2.threshold(heatmap, adaptive_thresh, 1.0, cv2.THRESH_BINARY)
+        
+        contours, _ = cv2.findContours(
+            (binary * 255).astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        )
+
+        valid_contours = [c for c in contours if min_area <= cv2.contourArea(c) <= max_area]
+
+        if valid_contours:
+            # Seleccionar el contorno que contiene el pico máximo o el más grande de los válidos
+            best_contour = max(valid_contours, key=cv2.contourArea)
+            M = cv2.moments(best_contour)
+            if M["m00"] != 0:
+                cx = int(M["m10"] / M["m00"])
+                cy = int(M["m01"] / M["m00"])
+                x, y, w, h = cv2.boundingRect(best_contour)
+                results.append((1, cx, cy, w, h))
+            else:
+                results.append((0, 0, 0, 0, 0))
+        else:
+            results.append((0, 0, 0, 0, 0))
+
     return results
 
 """
@@ -263,28 +304,23 @@ def procesar_y_reparar_trayectoria(pred_item, track_points, frame_width, frame_h
     return pred_item
 
 def calcular_tiempos_de_vuelo(
-        track_points, fps, umbral_acel=8000, min_frames_entre_golpes=10
+    track_points, fps, frame_height, min_frames_entre_golpes=10, k_sigma=2.5
 ):
     """
-    Calcula aceleraciones y tiempos de vuelo directamente sobre track_points ya reparado,
-    sin realizar reinterpolaciones innecesarias.
+    Calcula aceleraciones y eventos de impacto utilizando:
+      1. Normalización por altura del video (independiente de si es 720p, 1080p o 4K).
+      2. Umbral adaptativo estadístico basado en la media y desviación estándar de los picos.
     """
     indices_validos = [i for i, p in enumerate(track_points) if p is not None and p != (-1, -1)]
     
-    # 1. Si no hay suficientes puntos, retornar 5 elementos vacíos
     if len(indices_validos) < 4:
-        return [], np.array([]), np.array([]), np.array([]), np.array([])
+        return [], [], np.array([]), np.array([]), np.array([]), np.array([])
 
     inicio = indices_validos[0]
-
-    # 2. Rellenar huecos (None o (-1, -1)) usando los vecinos válidos más cercanos
     n_puntos = len(track_points)
     segmento = []
-
-    # Normalizar reemplazando None por (-1, -1) para procesar
     pts_temp = [(-1, -1) if p is None else p for p in track_points]
 
-    # Reemplazo por interpolación lineal/vecinos para todo el arreglo
     for p in range(n_puntos):
         if pts_temp[p] == (-1, -1):
             if p < n_puntos - 1 and pts_temp[p + 1] != (-1, -1):
@@ -292,7 +328,6 @@ def calcular_tiempos_de_vuelo(
             elif p > 0 and pts_temp[p - 1] != (-1, -1):
                 segmento.append(pts_temp[p - 1])
             else:
-                # Si está rodeado de invalidos, toma el punto válido más cercano
                 idx_cercano = min(indices_validos, key=lambda x: abs(x - p))
                 segmento.append(pts_temp[idx_cercano])
         else:
@@ -303,44 +338,53 @@ def calcular_tiempos_de_vuelo(
     y = pts[:, 1]
     dt = 1.0 / fps
 
-    # 3. Derivadas directas sobre la trayectoria ya suavizada
+    # Derivadas en píxeles (para métricas y visualización)
     vx = np.gradient(x, dt)
     vy = np.gradient(y, dt)
-    velocidad = np.hypot(vx,vy)
+    velocidad = np.hypot(vx, vy)
     
     ax = np.gradient(vx, dt)
     ay = np.gradient(vy, dt)
-    aceleracion = np.hypot(ax, ay)
 
-    # 4. Detección de picos de impacto
+    # 1. Normalización por altura de cuadro: unidades en (alturas_de_pantalla / s^2)
+    # De este modo, 720p, 1080p y 4K quedan en la misma escala numérica.
+    ay_norm = ay / frame_height
+    diff_ay_norm = np.abs(np.diff(ay_norm))
+
+    # 2. Umbral Adaptativo Estadístico:
+    # Un golpe es una anomalía impulsiva respecto a la trayectoria libre.
+    # Se define el umbral a partir de la mediana / percentil o media + k*sigma.
+    mediana = np.median(diff_ay_norm)
+    std_robusta = np.median(np.abs(diff_ay_norm - mediana)) * 1.4826  # MAD (más robusto a outliers)
+    
+    # Umbral dinámico calculado para este video en particular
+    umbral_dinamico = mediana + (k_sigma * std_robusta)
+    
+    # Cota mínima de seguridad para evitar falsos positivos en videos muy estáticos
+    # (~1.5 alturas de pantalla por segundo al cubo)
+    umbral_dinamico = max(umbral_dinamico, 1.5)
+
+    # 3. Detección de eventos con supresión de picos contiguos
     eventos_vuelo = []
     vel_evento = []
     ultimo_frame_golpe = None
-    n_puntos = len(aceleracion)
 
-    for i in range(1, n_puntos - 1):
-        es_pico = (
-            abs(ay[i] - ay[i-1]) > umbral_acel
-        )
-
-        if es_pico:
-            frame_real = inicio + i  # Mapear al índice global del video
+    for i in range(len(diff_ay_norm)):
+        if diff_ay_norm[i] > umbral_dinamico:
+            frame_real = inicio + i + 1
             
             if ultimo_frame_golpe is None:
                 ultimo_frame_golpe = frame_real
                 eventos_vuelo.append((frame_real, 0.0))
-                vel_evento.append((frame_real,0.0))
-                #print("Se detectó un evento")
+                vel_evento.append((frame_real, 0.0))
             elif (frame_real - ultimo_frame_golpe) >= min_frames_entre_golpes:
                 t_vuelo = (frame_real - ultimo_frame_golpe) * dt
+                vel_media = np.mean(velocidad[ultimo_frame_golpe : frame_real + 1])
                 eventos_vuelo.append((frame_real, round(t_vuelo, 3)))
-                vel_evento.append((frame_real, round(np.mean(velocidad[ultimo_frame_golpe : frame_real + 1]),1)))
+                vel_evento.append((frame_real, round(float(vel_media), 1)))
                 ultimo_frame_golpe = frame_real
-                #print("Se detectó un evento")
-        #else:
-           #print("No se detectó un evento")
 
-    return eventos_vuelo,vel_evento, vx, vy, ax, ay
+    return eventos_vuelo, vel_evento, vx, vy, ax, ay
 
 def main():
     args = parse_args()
@@ -395,10 +439,14 @@ def main():
             input_name = model.get_inputs()[0].name
             output = model.run(None, {input_name: input_tensor})[0]
 
+            # Cambio propuesto por gemini
+            predictions = postprocess_output(output)
+            """
+            # Funcion original
             predictions = postprocess_output(
                 output, input_height=input_height, input_width=input_width
             )
-            
+            """            
             # Gestiona la racha y rellena track_points
             procesar_y_reparar_trayectoria(
                 predictions[2], 
@@ -414,7 +462,13 @@ def main():
 
     pbar1.close()
 
-    eventos_vuelo,vel_evento,vx,vy,ax,ay = calcular_tiempos_de_vuelo(track_points,fps)
+    eventos_vuelo, vel_evento, vx, vy, ax, ay = calcular_tiempos_de_vuelo(
+        track_points, 
+        fps, 
+        frame_height=frame_height, 
+        min_frames_entre_golpes=10, 
+        k_sigma=2.5
+    )
 
     # Guardar resultados en el archivo CSV
     if csv_path is not None:
