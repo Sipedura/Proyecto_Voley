@@ -11,12 +11,14 @@ from tqdm import tqdm
 import math
 from scipy.interpolate import CubicSpline
 
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Volleyball ball detection and tracking"
     )
     parser.add_argument(
-        "--video_path", type=str, required=True, help="Path to input video file"
+        "--video_path", type=str, required=False, help="Path to input video file", default = "videos/voley8ed1.mp4"
+        #"--video_path", type=str, required=True, help="Path to input video file"
     )
     parser.add_argument(
         "--track_length", type=int, default=25, help="Length of the ball track"
@@ -24,14 +26,16 @@ def parse_args():
     parser.add_argument(
         "--output_dir",
         type=str,
-        default=None,
+        #default=None, #Este es el que va
         help="Directory to save output video and CSV",
+        default = "./predicts/"
     )
     parser.add_argument(
         "--model_path",
         type=str,
-        required=True,
+        required=False,
         help="Path to ONNX model file (e.g., models/vballNetV1.onnx)",
+        default = "vb-models/VballNetV1_150_h288_w512.onnx"
     )
     parser.add_argument(
         "--visualize",
@@ -388,6 +392,9 @@ def calcular_tiempos_de_vuelo(
 
 def main():
     args = parse_args()
+    #args.video_path = "videos/voley8ed1.mp4"
+    #args.model_path = "vb-models/VballNetV1_150_h288_w512.onnx"
+    #args.output_dir = "./predicts/"
     input_width, input_height = 512, 288
 
     """
@@ -437,6 +444,7 @@ def main():
             En estas líneas debe de obtener el mapa de calor y se los pasa a postprocess_output
             """
             input_name = model.get_inputs()[0].name
+            # Desde acá hay que aplicar un kernel de búsqueda reducida
             output = model.run(None, {input_name: input_tensor})[0]
 
             # Cambio propuesto por gemini
